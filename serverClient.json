@@ -1,1 +1,6 @@
+{"type":"menu", "menu":"main", "options":["Search headlines","List sources","Quit"]}
+{"type":"results", "result_type":"headlines", "items":[ {...}, {...} ], "count":5}
+{"type":"details","item":{...}}
+{"type":"error","message":"Invalid parameter"}
+{"type":"ack","message":"goodbye"}
 
