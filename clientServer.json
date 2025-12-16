@@ -1,5 +1,0 @@
-{"type":"hello", "client_name":"ahmed"}
-{"type":"request", "menu":"headlines", "action":"search_keywords", "params":{"q":"AI"}}
-{"type":"request", "menu":"sources", "action":"list_all", "params":{}}
-{"type":"select", "item_index": 2}
-{"type":"quit"}
