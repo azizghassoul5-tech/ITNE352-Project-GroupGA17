@@ -1,174 +1,229 @@
-# client.py
 import socket
-import ssl
 import json
-import os
-import textwrap
-from dotenv import load_dotenv
-from utils import send_json, recv_line, format_published_at
 
-load_dotenv()
-
-HOST = os.getenv("SERVER_HOST")
-PORT = int(os.getenv("SERVER_PORT"))
-USE_SSL = os.getenv("USE_SSL", "false").lower() == "true"
-
-def connect():
-    base = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    if USE_SSL:
-        ctx = ssl.create_default_context()
-        sock = ctx.wrap_socket(base, server_hostname=HOST)
-    else:
-        sock = base
-    sock.connect((HOST, PORT))
-    return sock, sock.makefile("r", encoding="utf-8", newline="\n")
-
-def wait(reader):
-    line = recv_line(reader)
-    if not line:
-        print("Server closed connection.")
-        exit()
-    return json.loads(line)
-
-def show_details(item):
-    print("\n--- DETAILS ---")
-    for k, v in item.items():
-        if k == "description":
-            print(textwrap.fill(v or "", width=80))
-        elif k == "publishedAt":
-            d, t = format_published_at(v)
-            print(f"Published at: {d}  {t}")
+class NewsClient:
+    def __init__(self, host='localhost', port=12345):
+        self.host = host
+        self.port = port
+        self.socket = None
+        self.username = ""
+        
+    def connect(self):
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((self.host, self.port))
+            
+            if not self.username:  # Only ask for username if not already set
+                self.username = input("Enter your username: ")
+            self.socket.send(self.username.encode('utf-8'))
+            
+            print(f"Connected to server as {self.username}")
+            return True
+        except Exception as e:
+            print(f"Connection failed: {e}")
+            return False
+    
+    def send_request(self, request_data):
+        try:
+            self.socket.send(json.dumps(request_data).encode('utf-8'))
+            
+            # Receive response in chunks to handle large data
+            response_data = b""
+            while True:
+                chunk = self.socket.recv(4096)
+                if not chunk:
+                    break
+                response_data += chunk
+                try:
+                    # Try to parse complete JSON
+                    response = json.loads(response_data.decode('utf-8'))
+                    return response
+                except json.JSONDecodeError:
+                    # Continue receiving if JSON is incomplete
+                    continue
+                
+        except Exception as e:
+            print(f"Request failed: {e}")
+            return None
+    
+    def display_main_menu(self):
+        print("\n=== MAIN MENU ===")
+        print("1. Search headlines")
+        print("2. List of sources")
+        print("3. Quit")
+        return input("Select option: ")
+    
+    def display_headlines_menu(self):
+        print("\n=== HEADLINES MENU ===")
+        print("1. Search for keywords")
+        print("2. Search by category")
+        print("3. Search by country")
+        print("4. List all new headlines")
+        print("5. Back to main menu")
+        return input("Select option: ")
+    
+    def display_sources_menu(self):
+        print("\n=== SOURCES MENU ===")
+        print("1. Search by category")
+        print("2. Search by country")
+        print("3. Search by language")
+        print("4. List all")
+        print("5. Back to main menu")
+        return input("Select option: ")
+    
+    def handle_headlines_request(self, option):
+        request_data = {'type': 'headlines'}
+        
+        if option == '1':
+            keyword = input("Enter keyword: ")
+            request_data['keyword'] = keyword
+        elif option == '2':
+            print("Categories: business, general, health, science, sports, technology")
+            category = input("Enter category: ")
+            request_data['category'] = category
+        elif option == '3':
+            print("Countries: au, ca, jp, ae, sa, kr, us, ma")
+            country = input("Enter country code: ")
+            request_data['country'] = country
+        elif option == '4':
+            pass  # No additional parameters needed
+            
+        response = self.send_request(request_data)
+        if response:
+            self.display_headlines_list(response)
+    
+    def display_headlines_list(self, response):
+        print("\n=== HEADLINES ===")
+        articles = response.get('data', [])
+        
+        for article in articles:
+            print(f"{article['id']}. {article['title']}")
+            print(f"   Source: {article['source']}, Author: {article['author']}")
+            print()
+        
+        choice = input("Enter article number for details (or 'back'): ")
+        if choice.isdigit():
+            article_id = int(choice)
+            if 0 <= article_id < len(articles):
+                self.request_article_details(article_id, response.get('full_data', []))
+    
+    def handle_sources_request(self, sources_type):
+        request_data = {'type': 'sources'}
+        
+        if sources_type == '1':  # By category
+            print("\nAvailable categories:")
+            categories = ['business', 'entertainment', 'general', 'health', 'science', 'sports', 'technology']
+            for i, cat in enumerate(categories, 1):
+                print(f"{i}. {cat.title()}")
+            
+            choice = input("Select category (1-7): ")
+            if choice.isdigit() and 1 <= int(choice) <= 7:
+                request_data['category'] = categories[int(choice)-1]
+                
+        elif sources_type == '2':  # By country
+            print("\nAvailable countries:")
+            countries = {'1': 'us', '2': 'gb', '3': 'ca', '4': 'au', '5': 'de'}
+            for key, value in countries.items():
+                print(f"{key}. {value.upper()}")
+            
+            choice = input("Select country (1-5): ")
+            if choice in countries:
+                request_data['country'] = countries[choice]
+                
+        elif sources_type == '3':  # By language
+            print("\nAvailable languages:")
+            languages = {'1': 'en', '2': 'ar'}  # Only en and ar as per assignment
+            for key, value in languages.items():
+                print(f"{key}. {value}")
+            
+            choice = input("Select language (1-2): ")
+            if choice in languages:
+                request_data['language'] = languages[choice]
+        elif sources_type == '4':
+            # List all sources - no additional parameters needed
+            pass
+        
+        response = self.send_request(request_data)
+        
+        if response and response.get('type') == 'sources_list':
+            print(f"\n--- News Sources ---")
+            for i, source in enumerate(response['data']):
+                print(f"{i}. {source['name']}")
+            print()
+            
+            choice = input("Enter source number for details (or 'back'): ")
+            if choice.isdigit():
+                source_id = int(choice)
+                if 0 <= source_id < len(response['data']):
+                    source = response['data'][source_id]
+                    print(f"\n--- Source Details ---")
+                    print(f"Name: {source['name']}")
+                    print(f"Country: {source['country']}")
+                    print(f"Description: {source['description']}")
+                    print(f"URL: {source['url']}")
+                    print(f"Category: {source['category']}")
+                    print(f"Language: {source['language']}")
+        elif response and response.get('type') == 'error':
+            print(f"Error: {response['message']}")
         else:
-            print(f"{k}: {v}")
-    print()
+            print("Failed to retrieve sources.")
 
-def headlines_menu(sock, reader):
-    while True:
-        print("\nHeadlines Menu")
-        print("1) Search keywords")
-        print("2) Search category")
-        print("3) Search country")
-        print("4) List all")
-        print("5) Back")
-        ch = input("> ")
+    def request_article_details(self, article_id, full_data=None):
+        request_data = {
+            'type': 'details',
+            'article_id': article_id
+        }
+        
+        response = self.send_request(request_data)
+        
+        if response and response.get('type') == 'article_details':
+            data = response['data']
+            print(f"\n--- Article Details ---")
+            print(f"Title: {data.get('title', 'N/A')}")
+            print(f"Source: {data.get('source', 'N/A')}")
+            print(f"Author: {data.get('author', 'N/A')}")
+            print(f"URL: {data.get('url', 'N/A')}")
+            print(f"Description: {data.get('description', 'N/A')}")
+            print(f"Published: {data.get('publishedAt', 'N/A')}")
+            if data.get('content'):
+                print(f"Content: {data.get('content', 'N/A')}")
+        elif response and response.get('type') == 'error':
+            print(f"Error: {response['message']}")
+        else:
+            print("Failed to retrieve article details.")
 
-        params = {}
-        if ch == "1":
-            params["q"] = input("Keyword: ")
-            action = "search_keywords"
-        elif ch == "2":
-            params["category"] = input("Category: ")
-            action = "search_category"
-        elif ch == "3":
-            params["country"] = input("Country code: ")
-            action = "search_country"
-        elif ch == "4":
-            action = "list_all"
-        elif ch == "5":
+    def run(self):
+        if not self.connect():
             return
-        else:
-            continue
-
-        send_json(sock, {"type":"request","menu":"headlines","action":action,"params":params})
-        msg = wait(reader)
-
-        if msg["type"] == "error":
-            print("Error:", msg["message"])
-            continue
-
-        for it in msg["items"]:
-            print(f"{it['index']}) [{it.get('source')}] {it.get('author')} - {it.get('title')}")
-
-        while True:
-            i = input("Select index or B: ")
-            if i.lower() == "b":
-                break
-            if not i.isdigit(): continue
-
-            send_json(sock, {"type":"select","result_type":"headlines","index":int(i)})
-            d = wait(reader)
-            if d["type"] == "error":
-                print(d["message"])
-                continue
-            show_details(d["item"])
-
-def sources_menu(sock, reader):
-    while True:
-        print("\nSources Menu")
-        print("1) Category")
-        print("2) Country")
-        print("3) Language")
-        print("4) List all")
-        print("5) Back")
-        ch = input("> ")
-
-        params = {}
-        if ch == "1":
-            params["category"] = input("Category: ")
-            action = "src_cat"
-        elif ch == "2":
-            params["country"] = input("Country: ")
-            action = "src_country"
-        elif ch == "3":
-            params["language"] = input("Language: ")
-            action = "src_lang"
-        elif ch == "4":
-            action = "list_all"
-        elif ch == "5":
-            return
-        else:
-            continue
-
-        send_json(sock, {"type":"request","menu":"sources","action":action,"params":params})
-        msg = wait(reader)
-
-        if msg["type"] == "error":
-            print("Error:", msg["message"])
-            continue
-
-        for it in msg["items"]:
-            print(f"{it['index']}) {it['name']}")
-
-        while True:
-            i = input("Select index or B: ")
-            if i.lower() == "b":
-                break
-            if not i.isdigit(): continue
-
-            send_json(sock, {"type":"select","result_type":"sources","index":int(i)})
-            d = wait(reader)
-            if d["type"] == "error":
-                print(d["message"])
-                continue
-            show_details(d["item"])
-
-def main():
-    sock, reader = connect()
-
-    username = input("Enter username: ").strip()
-    if not username: username = "guest"
-
-    send_json(sock, {"type":"hello","client_name":username})
-    print(wait(reader)["message"])
-
-    while True:
-        print("\nMain Menu")
-        print("1) Headlines")
-        print("2) Sources")
-        print("3) Quit")
-        ch = input("> ")
-
-        if ch == "1":
-            headlines_menu(sock, reader)
-        elif ch == "2":
-            sources_menu(sock, reader)
-        elif ch == "3":
-            send_json(sock, {"type":"quit"})
-            print(wait(reader)["message"])
-            break
-
-    sock.close()
+            
+        try:
+            while True:
+                choice = self.display_main_menu()
+                
+                if choice == '1':
+                    while True:
+                        headlines_choice = self.display_headlines_menu()
+                        if headlines_choice == '5':
+                            break
+                        elif headlines_choice in ['1', '2', '3', '4']:
+                            self.handle_headlines_request(headlines_choice)
+                        
+                elif choice == '2':
+                    while True:
+                        sources_choice = self.display_sources_menu()
+                        if sources_choice == '5':
+                            break
+                        elif sources_choice in ['1', '2', '3', '4']:
+                            self.handle_sources_request(sources_choice)
+                            
+                elif choice == '3':
+                    print("Goodbye!")
+                    break
+                    
+        finally:
+            if self.socket:
+                self.socket.close()
 
 if __name__ == "__main__":
-    main()
-
+    client = NewsClient()
+    client.run()
