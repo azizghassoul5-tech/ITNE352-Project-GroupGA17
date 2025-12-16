@@ -5,7 +5,7 @@ import socket
 import threading
 
 class NewsClient:
-    """Simplified NewsClient for GUI"""
+    
     def __init__(self, host='localhost', port=12345):
         self.host = host
         self.port = port
