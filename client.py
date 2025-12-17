@@ -201,7 +201,7 @@ class NewsClient:
             return
         
         for article in articles:
-            print(f"\n{article['id']}. 📄 {article['title']}")
+            print(f"\n{article['id']}.  {article['title']}")
             print(f"    Source: {article['source']} |   Author: {article['author']}")
             print("-" * 80)
         
