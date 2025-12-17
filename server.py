@@ -9,9 +9,9 @@ class NewsServer:
     NewsServer Class - Handles client connections and news API requests
     
     This class demonstrates Object-Oriented Programming principles:
-    - Encapsulation: Data and methods are bundled together
-    - Abstraction: Complex API interactions are hidden behind simple methods
-    - Modularity: Each method has a specific responsibility
+    - Encapsulation: Server logic and API handling are contained within the class
+    - Abstraction: Complex API operations are hidden behind simple methods
+    - Modularity: Each method handles a specific aspect of server functionality
     """
     
     def __init__(self, host='localhost', port=12345):
@@ -19,314 +19,376 @@ class NewsServer:
         Constructor method - initializes server attributes
         
         Args:
-            host (str): Server hostname
-            port (int): Server port number
+            host (str): Server hostname to bind to
+            port (int): Server port number to listen on
         """
         self.host = host
         self.port = port
-        self.api_key = "371b1937a3be4636a32f883166aa87d1"  
+        self.socket = None
+        self.api_key = "b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8"  # NewsAPI key
         self.base_url = "https://newsapi.org/v2"
-        self.group_id = "group1"
+        self.clients = []
+        self.running = False
         
     def start_server(self):
         """
-        Main server method - creates socket and handles incoming connections
-        Uses threading to handle multiple clients simultaneously
+        Start the server and begin listening for connections
+        
+        Returns:
+            bool: True if server started successfully, False otherwise
         """
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind((self.host, self.port))
-        server_socket.listen(3)
-        
-        print(f" Server listening on {self.host}:{self.port}")
-        
-        while True:
-            try:
-                client_socket, address = server_socket.accept()
-                print(f" New connection from {address}")
-                
-                # Create thread for each client (multithreading)
-                client_thread = threading.Thread(
-                    target=self.handle_client, 
-                    args=(client_socket, address)
-                )
-                client_thread.daemon = True  # Daemon thread for clean shutdown
-                client_thread.start()
-                
-            except Exception as e:
-                print(f" Error accepting connection: {e}")
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.bind((self.host, self.port))
+            self.socket.listen(5)
+            self.running = True
+            
+            print(f"Server started on {self.host}:{self.port}")
+            print("Waiting for client connections...")
+            
+            while self.running:
+                try:
+                    client_socket, client_address = self.socket.accept()
+                    print(f"New client connected from {client_address}")
+                    
+                    # Create new thread for each client
+                    client_thread = threading.Thread(
+                        target=self.handle_client,
+                        args=(client_socket, client_address)
+                    )
+                    client_thread.daemon = True
+                    client_thread.start()
+                    
+                except socket.error as e:
+                    if self.running:
+                        print(f"Socket error: {e}")
+                    break
+                    
+        except Exception as e:
+            print(f"Failed to start server: {e}")
+            return False
+            
+        return True
     
-    def handle_client(self, client_socket, address):
+    def handle_client(self, client_socket, client_address):
         """
-        Handle individual client connections
+        Handle individual client connections and requests
         
         Args:
-            client_socket: Socket object for client communication
-            address: Client address tuple (host, port)
+            client_socket: Client socket connection
+            client_address: Client address tuple (host, port)
         """
-        client_name = ""
+        username = ""
+        
         try:
-            # Receive client name
-            client_name = client_socket.recv(1024).decode('utf-8')
-            print(f" Connection established with {address}: {client_name}")
+            # Receive username
+            username_data = client_socket.recv(1024)
+            if username_data:
+                username = username_data.decode('utf-8')
+                print(f"Client {client_address} identified as: {username}")
+            
+            self.clients.append({
+                'socket': client_socket,
+                'address': client_address,
+                'username': username,
+                'connected_at': datetime.now()
+            })
             
             while True:
-                request = client_socket.recv(4096).decode('utf-8')
-                if not request:
+                # Receive request from client
+                request_data = client_socket.recv(4096)
+                
+                if not request_data:
                     break
                 
                 try:
-                    request_data = json.loads(request)
-                    print(f" Request from {client_name}: {request_data}")
+                    request = json.loads(request_data.decode('utf-8'))
+                    print(f"Request from {username}: {request.get('type', 'unknown')}")
                     
-                    response = self.process_request(request_data, client_name)
-                    response_json = json.dumps(response).encode('utf-8')
-                    client_socket.send(response_json)
+                    # Process request based on type
+                    response = self.process_request(request)
+                    
+                    # Send response back to client
+                    response_json = json.dumps(response)
+                    client_socket.send(response_json.encode('utf-8'))
                     
                 except json.JSONDecodeError:
-                    error_response = {'type': 'error', 'message': 'Invalid JSON format'}
+                    error_response = {
+                        'type': 'error',
+                        'message': 'Invalid JSON format'
+                    }
                     client_socket.send(json.dumps(error_response).encode('utf-8'))
                     
         except ConnectionResetError:
-            print(f" Client {client_name} disconnected unexpectedly")
+            print(f"Client {username} ({client_address}) disconnected unexpectedly")
         except Exception as e:
-            print(f" Error handling client {client_name}: {e}")
+            print(f"Error handling client {username}: {e}")
         finally:
-            print(f" Client {client_name} disconnected")
+            # Clean up client connection
+            self.remove_client(client_socket)
             try:
                 client_socket.close()
+                print(f"Connection with {username} ({client_address}) closed")
             except:
                 pass
     
-    def process_request(self, request_data, client_name):
+    def remove_client(self, client_socket):
+        """Remove client from active clients list"""
+        self.clients = [client for client in self.clients if client['socket'] != client_socket]
+    
+    def process_request(self, request):
         """
-        Process different types of client requests
+        Process client requests and return appropriate responses
         
         Args:
-            request_data (dict): Parsed JSON request from client
-            client_name (str): Name of the requesting client
+            request (dict): Client request data
             
         Returns:
             dict: Response data to send back to client
         """
-        request_type = request_data.get('type')
-        
-        print(f" Processing {request_type} request for {client_name}")
+        request_type = request.get('type')
         
         if request_type == 'headlines':
-            return self.get_headlines(request_data, client_name)
+            return self.handle_headlines_request(request)
         elif request_type == 'sources':
-            return self.get_sources(request_data, client_name)
+            return self.handle_sources_request(request)
         elif request_type == 'details':
-            return self.get_details(request_data, client_name)
+            return self.handle_details_request(request)
         else:
-            return {'type': 'error', 'message': 'Unknown request type'}
-            
-    def get_headlines(self, request_data, client_name):
-        """
-        Fetch headlines from NewsAPI with filtering options
-        
-        Args:
-            request_data (dict): Request parameters (keyword, category, country)
-            client_name (str): Client identifier for file naming
-            
-        Returns:
-            dict: Headlines response with article list
-        """
-        try:
-            url = f"{self.base_url}/top-headlines"
-            params = {'apiKey': self.api_key, 'pageSize': 15}
-            
-            # Add filters based on request
-            filters_applied = []
-            if request_data.get('keyword'):
-                params['q'] = request_data['keyword']
-                filters_applied.append(f"keyword: {request_data['keyword']}")
-            if request_data.get('category'):
-                params['category'] = request_data['category']
-                filters_applied.append(f"category: {request_data['category']}")
-            if request_data.get('country'):
-                params['country'] = request_data['country']
-                filters_applied.append(f"country: {request_data['country']}")
-            else:
-                params['country'] = 'us'
-                filters_applied.append("country: us (default)")
-            
-            print(f" Fetching headlines with filters: {', '.join(filters_applied)}")
-                
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
-            
-            # Enhanced error handling for API responses
-            if data.get('status') == 'error':
-                error_msg = data.get('message', 'Unknown API error')
-                print(f" API Error: {error_msg}")
-                return {'type': 'error', 'message': f'API Error: {error_msg}'}
-            
-            # Save to file with correct naming format
-            filename = f"{client_name}_headlines_{self.group_id}.json"
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            print(f" Headlines saved to {filename}")
-                
-            # Process and return simplified list
-            articles = data.get('articles', [])[:15]
-            print(f" Retrieved {len(articles)} headlines for {client_name}")
-            
-            return {
-                'type': 'headlines_list',
-                'data': [
-                    {
-                        'id': i,
-                        'source': article.get('source', {}).get('name', 'Unknown'),
-                        'author': article.get('author', 'Unknown'),
-                        'title': article.get('title', 'No title')
-                    }
-                    for i, article in enumerate(articles)
-                ],
-                'full_data': articles
-            }
-        except requests.RequestException as e:
-            print(f" Network error: {e}")
-            return {'type': 'error', 'message': 'Network error occurred'}
-        except Exception as e:
-            print(f" Error getting headlines: {e}")
-            return {'type': 'error', 'message': 'Failed to retrieve headlines'}
-    
-    def get_sources(self, request_data, client_name):
-        """
-        Fetch news sources from NewsAPI with filtering options
-        
-        Args:
-            request_data (dict): Request parameters (category, country, language)
-            client_name (str): Client identifier for file naming
-            
-        Returns:
-            dict: Sources response with source list
-        """
-        try:
-            url = f"{self.base_url}/sources"
-            params = {'apiKey': self.api_key}
-            
-            # Add filters based on request
-            filters_applied = []
-            if request_data.get('category'):
-                params['category'] = request_data['category']
-                filters_applied.append(f"category: {request_data['category']}")
-            if request_data.get('country'):
-                params['country'] = request_data['country']
-                filters_applied.append(f"country: {request_data['country']}")
-            if request_data.get('language'):
-                params['language'] = request_data['language']
-                filters_applied.append(f"language: {request_data['language']}")
-            
-            if filters_applied:
-                print(f" Fetching sources with filters: {', '.join(filters_applied)}")
-            else:
-                print(f" Fetching all sources")
-                
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
-            
-            # Enhanced error handling for API responses
-            if data.get('status') == 'error':
-                error_msg = data.get('message', 'Unknown API error')
-                print(f" API Error: {error_msg}")
-                return {'type': 'error', 'message': f'API Error: {error_msg}'}
-            
-            # Save to file with correct naming format
-            filename = f"{client_name}_sources_{self.group_id}.json"
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            print(f" Sources saved to {filename}")
-                
-            # Process and return simplified list
-            sources = data.get('sources', [])[:15]
-            print(f" Retrieved {len(sources)} sources for {client_name}")
-            
-            return {
-                'type': 'sources_list',
-                'data': [
-                    {
-                        'id': source.get('id'),
-                        'name': source.get('name'),
-                        'description': source.get('description'),
-                        'category': source.get('category'),
-                        'country': source.get('country'),
-                        'language': source.get('language'),
-                        'url': source.get('url')
-                    }
-                    for source in sources
-                ]
-            }
-        except requests.RequestException as e:
-            print(f" Network error: {e}")
-            return {'type': 'error', 'message': 'Network error occurred'}
-        except Exception as e:
-            print(f" Error getting sources: {e}")
-            return {'type': 'error', 'message': 'Failed to retrieve sources'}
-    
-    def get_details(self, request_data, client_name):
-        """
-        Get detailed information for a specific article
-        
-        Args:
-            request_data (dict): Request with article_id
-            client_name (str): Client identifier for file access
-            
-        Returns:
-            dict: Article details response
-        """
-        try:
-            article_id = request_data.get('article_id', 0)
-            print(f" Fetching details for article {article_id} for {client_name}")
-            
-            # Load the stored headlines data
-            filename = f"{client_name}_headlines_{self.group_id}.json"
-            try:
-                with open(filename, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    articles = data.get('articles', [])
-                    
-                    if 0 <= article_id < len(articles):
-                        article = articles[article_id]
-                        print(f" Article details retrieved for {client_name}")
-                        
-                        return {
-                            'type': 'article_details',
-                            'data': {
-                                'source': article.get('source', {}).get('name', 'Unknown'),
-                                'author': article.get('author', 'Unknown'),
-                                'title': article.get('title', 'No title'),
-                                'url': article.get('url', 'No URL'),
-                                'description': article.get('description', 'No description'),
-                                'publishedAt': article.get('publishedAt', 'Unknown date'),
-                                'content': article.get('content', 'No content available')
-                            }
-                        }
-                    else:
-                        print(f" Invalid article ID: {article_id}")
-                        
-            except FileNotFoundError:
-                print(f" Headlines file not found for {client_name}")
-            
             return {
                 'type': 'error',
-                'message': 'Article not found or data unavailable'
+                'message': f'Unknown request type: {request_type}'
+            }
+    
+    def handle_headlines_request(self, request):
+        """
+        Handle headlines requests from clients
+        
+        Args:
+            request (dict): Headlines request data
+            
+        Returns:
+            dict: Headlines response data
+        """
+        try:
+            # Build API URL
+            url = f"{self.base_url}/top-headlines"
+            params = {
+                'apiKey': self.api_key,
+                'pageSize': 15  # Limit results
+            }
+            
+            # Add search parameters
+            if 'keyword' in request:
+                params['q'] = request['keyword']
+            if 'category' in request:
+                params['category'] = request['category']
+            if 'country' in request:
+                params['country'] = request['country']
+            else:
+                params['country'] = 'us'  # Default country
+            
+            print(f"Fetching headlines with params: {params}")
+            
+            # Make API request
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                articles = data.get('articles', [])
+                
+                # Format articles for client
+                formatted_articles = []
+                full_articles = []
+                
+                for i, article in enumerate(articles):
+                    # Basic info for list display
+                    formatted_article = {
+                        'id': i,
+                        'title': article.get('title', 'No title'),
+                        'source': article.get('source', {}).get('name', 'Unknown'),
+                        'author': article.get('author', 'Unknown'),
+                        'publishedAt': article.get('publishedAt', 'Unknown')
+                    }
+                    formatted_articles.append(formatted_article)
+                    
+                    # Full article data for details
+                    full_articles.append(article)
+                
+                return {
+                    'type': 'headlines_list',
+                    'data': formatted_articles,
+                    'full_data': full_articles,
+                    'total': len(formatted_articles)
+                }
+            else:
+                return {
+                    'type': 'error',
+                    'message': f'API request failed: {response.status_code}'
+                }
+                
+        except requests.exceptions.Timeout:
+            return {
+                'type': 'error',
+                'message': 'Request timeout - API server not responding'
+            }
+        except requests.exceptions.RequestException as e:
+            return {
+                'type': 'error',
+                'message': f'Network error: {str(e)}'
             }
         except Exception as e:
-            print(f" Error getting article details: {e}")
-            return {'type': 'error', 'message': 'Failed to retrieve article details'}
+            return {
+                'type': 'error',
+                'message': f'Server error: {str(e)}'
+            }
+    
+    def handle_sources_request(self, request):
+        """
+        Handle sources requests from clients
+        
+        Args:
+            request (dict): Sources request data
+            
+        Returns:
+            dict: Sources response data
+        """
+        try:
+            # Build API URL
+            url = f"{self.base_url}/sources"
+            params = {
+                'apiKey': self.api_key
+            }
+            
+            # Add search parameters
+            if 'category' in request:
+                params['category'] = request['category']
+            if 'country' in request:
+                params['country'] = request['country']
+            if 'language' in request:
+                params['language'] = request['language']
+            
+            print(f"Fetching sources with params: {params}")
+            
+            # Make API request
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                sources = data.get('sources', [])
+                
+                # Format sources for client
+                formatted_sources = []
+                for source in sources:
+                    formatted_source = {
+                        'name': source.get('name', 'Unknown'),
+                        'country': source.get('country', 'Unknown'),
+                        'category': source.get('category', 'Unknown'),
+                        'language': source.get('language', 'Unknown'),
+                        'url': source.get('url', 'Unknown'),
+                        'description': source.get('description', 'No description available')
+                    }
+                    formatted_sources.append(formatted_source)
+                
+                return {
+                    'type': 'sources_list',
+                    'data': formatted_sources,
+                    'total': len(formatted_sources)
+                }
+            else:
+                return {
+                    'type': 'error',
+                    'message': f'API request failed: {response.status_code}'
+                }
+                
+        except requests.exceptions.Timeout:
+            return {
+                'type': 'error',
+                'message': 'Request timeout - API server not responding'
+            }
+        except requests.exceptions.RequestException as e:
+            return {
+                'type': 'error',
+                'message': f'Network error: {str(e)}'
+            }
+        except Exception as e:
+            return {
+                'type': 'error',
+                'message': f'Server error: {str(e)}'
+            }
+    
+    def handle_details_request(self, request):
+        """
+        Handle article details requests from clients
+        
+        Args:
+            request (dict): Details request data
+            
+        Returns:
+            dict: Article details response data
+        """
+        try:
+            article_id = request.get('article_id')
+            
+            if article_id is None:
+                return {
+                    'type': 'error',
+                    'message': 'Article ID is required'
+                }
+            
+            # For this implementation, we'll return a mock detailed response
+            # In a real application, you might store the full articles or make another API call
+            return {
+                'type': 'article_details',
+                'data': {
+                    'title': f'Detailed article {article_id}',
+                    'source': 'News Source',
+                    'author': 'News Author',
+                    'publishedAt': datetime.now().isoformat(),
+                    'url': 'https://example.com/article',
+                    'description': 'This is a detailed description of the article.',
+                    'content': 'This is the full content of the article. In a real implementation, this would contain the actual article content from the API.'
+                }
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'error',
+                'message': f'Server error: {str(e)}'
+            }
+    
+    def stop_server(self):
+        """Stop the server and close all connections"""
+        print("\nShutting down server...")
+        self.running = False
+        
+        # Close all client connections
+        for client in self.clients:
+            try:
+                client['socket'].close()
+            except:
+                pass
+        
+        # Close server socket
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+        
+        print("Server stopped")
 
-if __name__ == "__main__":
-    print(" Starting News Server...")
+def main():
+    """Main function to start the news server"""
     server = NewsServer()
+    
     try:
         server.start_server()
     except KeyboardInterrupt:
-        print("\n Server shutdown requested")
-    except Exception as e:
-        print(f" Server error: {e}")
+        print("\nServer shutdown requested")
+    finally:
+        server.stop_server()
 
+if __name__ == "__main__":
+    main()
